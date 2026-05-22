@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Detector de Drones — SDR</title>
+<style>
+  :root {
+    --bg:       #0a0e1a;
+    --surface:  #111827;
+    --border:   #1f2937;
+    --text:     #e5e7eb;
+    --muted:    #6b7280;
+    --green:    #10b981;
+    --red:      #ef4444;
+    --amber:    #f59e0b;
+    --blue:     #3b82f6;
+    --cyan:     #06b6d4;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    min-height: 100vh;
+    padding: 1.5rem;
+  }
+
+  /* ── Header ─────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: 0.05em; }
+  header p  { font-size: 0.75rem; color: var(--muted); }
+
+  .dot-ws {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--muted); flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .dot-ws.connected    { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot-ws.disconnected { background: var(--red); }
+
+  /* ── Grid principal ──────────────────────────────────── */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+
+  /* ── Tarjeta base ────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+  }
+  .card-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  /* ── Tarjeta de estado principal ─────────────────────── */
+  .card-estado {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.5rem;
+    border-radius: 12px;
+    transition: border-color 0.4s, background 0.4s;
+  }
+  .card-estado.seguro  { border-color: var(--green); background: rgba(16,185,129,0.05); }
+  .card-estado.alerta  { border-color: var(--red);   background: rgba(239,68,68,0.08);
+                          animation: pulso 1.2s ease-in-out infinite; }
+
+  @keyframes pulso {
+    0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.3); }
+    50%      { box-shadow: 0 0 0 10px rgba(239,68,68,0); }
+  }
+
+  .estado-icono { font-size: 2.8rem; line-height: 1; }
+  .estado-texto h2 { font-size: 1.4rem; font-weight: 700; }
+  .estado-texto p  { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+  .estado-seguro { color: var(--green); }
+  .estado-alerta { color: var(--red); }
+
+  /* ── Score bar ───────────────────────────────────────── */
+  .score-wrap { margin-top: 0.6rem; }
+  .score-num {
+    font-size: 2rem; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .score-track {
+    height: 6px;
+    background: var(--border);
+    border-radius: 999px;
+    margin-top: 0.6rem;
+    overflow: hidden;
+  }
+  .score-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--green);
+    transition: width 0.15s ease, background 0.3s;
+  }
+
+  /* ── Métricas pequeñas ───────────────────────────────── */
+  .metric-val {
+    font-size: 1.6rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .metric-sub { font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem; }
+
+  /* ── Espectrograma canvas ────────────────────────────── */
+  .card-fft { grid-column: 1 / -1; }
+  #fft-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.6rem;
+    color: var(--muted);
+    margin-top: 0.3rem;
+    padding: 0 2px;
+  }
+
+  canvas {
+    width: 100%;
+    height: 160px;
+    display: block;
+    border-radius: 6px;
+    background: #060a14;
+  }
+
+  /* ── Log de eventos ──────────────────────────────────── */
+  .card-log { grid-column: 1 / -1; }
+  #log {
+    height: 120px;
+    overflow-y: auto;
+    font-size: 0.72rem;
+    line-height: 1.8;
+    color: var(--muted);
+  }
+  #log .ev-alerta  { color: var(--red); }
+  #log .ev-limpio  { color: var(--green); }
+  #log .ev-sistema { color: var(--blue); }
+
+  /* ── Barra de bins ───────────────────────────────────── */
+  .bins-track {
+    height: 8px;
+    background: var(--border);
+    border-radius: 999px;
+    margin-top: 0.6rem;
+    overflow: hidden;
+  }
+  .bins-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--cyan);
+    transition: width 0.15s ease;
+  }
+
+  /* ── Piso de ruido sparkline ─────────────────────────── */
+  #sparkline { width: 100%; height: 50px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="dot-ws disconnected" id="dot-ws"></div>
+  <div>
+    <h1>📡 DETECTOR DE DRONES — SDR HackRF One</h1>
+    <p id="ws-status">Conectando a ws://localhost:8765…</p>
+  </div>
+</header>
+
+<!-- Estado principal -->
+<div class="grid">
+  <div class="card card-estado seguro" id="card-estado">
+    <div class="estado-icono" id="estado-icono">🟢</div>
+    <div class="estado-texto">
+      <h2 class="estado-seguro" id="estado-texto">ESPECTRO SEGURO</h2>
+      <p id="estado-sub">Esperando datos del servidor…</p>
+    </div>
+  </div>
+
+  <!-- Score -->
+  <div class="card">
+    <div class="card-label">Score de confianza</div>
+    <div class="score-wrap">
+      <span class="score-num" id="score-num">0.00</span>
+      <span style="font-size:0.8rem; color:var(--muted);"> / 10</span>
+    </div>
+    <div class="score-track">
+      <div class="score-fill" id="score-fill" style="width:0%"></div>
+    </div>
+  </div>
+
+  <!-- Bins activos -->
+  <div class="card">
+    <div class="card-label">Líneas espectrales activas</div>
+    <div class="metric-val" id="bins-num">0</div>
+    <div class="metric-sub" id="bins-sub">mínimo requerido: 3</div>
+    <div class="bins-track">
+      <div class="bins-fill" id="bins-fill" style="width:0%"></div>
+    </div>
+  </div>
+
+  <!-- Piso de ruido -->
+  <div class="card">
+    <div class="card-label">Piso de ruido instantáneo</div>
+    <div class="metric-val" id="piso-num">—</div>
+    <div class="metric-sub">mediana espectral del bloque</div>
+    <svg id="sparkline" viewBox="0 0 300 50" preserveAspectRatio="none">
+      <polyline id="spark-line" points="" fill="none"
+        stroke="var(--amber)" stroke-width="1.5" stroke-linejoin="round"/>
+    </svg>
+  </div>
+
+  <!-- Bloques procesados -->
+  <div class="card">
+    <div class="card-label">Bloques procesados</div>
+    <div class="metric-val" id="bloques-num">0</div>
+    <div class="metric-sub" id="umbral-txt">umbral local: —</div>
+  </div>
+
+  <!-- Espectro FFT -->
+  <div class="card card-fft">
+    <div class="card-label">Espectro en tiempo real (FFT normalizada)</div>
+    <canvas id="fft-canvas"></canvas>
+    <div id="fft-labels">
+      <span id="freq-min">—</span>
+      <span id="freq-cen">fc</span>
+      <span id="freq-max">—</span>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="card card-log">
+    <div class="card-label">Registro de eventos</div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+// ── Constantes de la UI ──────────────────────────────────────
+const FC_HZ      = 2_399_045_000;
+const SR_HZ      = 10_000_000;
+const FC_MHZ     = (FC_HZ / 1e6).toFixed(3);
+const FMIN_MHZ   = ((FC_HZ - SR_HZ / 2) / 1e6).toFixed(1);
+const FMAX_MHZ   = ((FC_HZ + SR_HZ / 2) / 1e6).toFixed(1);
+
+document.getElementById('freq-min').textContent = FMIN_MHZ + ' MHz';
+document.getElementById('freq-cen').textContent = FC_MHZ + ' MHz';
+document.getElementById('freq-max').textContent = FMAX_MHZ + ' MHz';
+
+// ── Referencias DOM ──────────────────────────────────────────
+const dotWs       = document.getElementById('dot-ws');
+const wsStatus    = document.getElementById('ws-status');
+const cardEstado  = document.getElementById('card-estado');
+const estadoIcono = document.getElementById('estado-icono');
+const estadoTexto = document.getElementById('estado-texto');
+const estadoSub   = document.getElementById('estado-sub');
+const scoreNum    = document.getElementById('score-num');
+const scoreFill   = document.getElementById('score-fill');
+const binsNum     = document.getElementById('bins-num');
+const binsSub     = document.getElementById('bins-sub');
+const binsFill    = document.getElementById('bins-fill');
+const pisoNum     = document.getElementById('piso-num');
+const bloquesNum  = document.getElementById('bloques-num');
+const umbralTxt   = document.getElementById('umbral-txt');
+const logDiv      = document.getElementById('log');
+const fftCanvas   = document.getElementById('fft-canvas');
+const ctx         = fftCanvas.getContext('2d');
+const sparkLine   = document.getElementById('spark-line');
+
+// ── Sparkline del piso de ruido ──────────────────────────────
+const sparkData = [];
+const SPARK_MAX = 80;
+
+function actualizarSparkline(valor) {
+  sparkData.push(valor);
+  if (sparkData.length > SPARK_MAX) sparkData.shift();
+
+  const min = Math.min(...sparkData);
+  const max = Math.max(...sparkData) || 1;
+  const W = 300, H = 50;
+
+  const pts = sparkData.map((v, i) => {
+    const x = (i / (SPARK_MAX - 1)) * W;
+    const y = H - ((v - min) / (max - min + 1e-9)) * (H - 4) - 2;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  sparkLine.setAttribute('points', pts);
+}
+
+// ── Canvas FFT ───────────────────────────────────────────────
+function dibujarFFT(fftNorm, umbralNorm) {
+  const W = fftCanvas.offsetWidth || 600;
+  const H = 160;
+  fftCanvas.width  = W;
+  fftCanvas.height = H;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Fondo
+  ctx.fillStyle = '#060a14';
+  ctx.fillRect(0, 0, W, H);
+
+  // Línea de umbral
+  const yUmbral = H - umbralNorm * H;
+  ctx.strokeStyle = 'rgba(245,158,11,0.5)';
+  ctx.lineWidth   = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(0, yUmbral);
+  ctx.lineTo(W, yUmbral);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Espectro
+  const n = fftNorm.length;
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * W;
+    const y = H - fftNorm[i] * H;
+    i === 0 ? ctx.lineTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.lineTo(W, H);
+  ctx.closePath();
+
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0,   'rgba(6,182,212,0.9)');
+  grad.addColorStop(0.6, 'rgba(6,182,212,0.4)');
+  grad.addColorStop(1,   'rgba(6,182,212,0.05)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.strokeStyle = '#06b6d4';
+  ctx.lineWidth   = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * W;
+    const y = H - fftNorm[i] * H;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+// ── Log de eventos ───────────────────────────────────────────
+let ultimaAlerta = null;
+
+function addLog(msg, clase) {
+  const ts   = new Date().toLocaleTimeString();
+  const linea = document.createElement('div');
+  linea.className = clase;
+  linea.textContent = `[${ts}]  ${msg}`;
+  logDiv.appendChild(linea);
+  logDiv.scrollTop = logDiv.scrollHeight;
+  // Límite de 200 líneas
+  while (logDiv.children.length > 200) logDiv.removeChild(logDiv.firstChild);
+}
+
+// ── Actualizar UI con datos del servidor ─────────────────────
+function actualizarUI(d) {
+  const alerta = d.alerta_activa;
+
+  // Tarjeta de estado
+  cardEstado.className = 'card card-estado ' + (alerta ? 'alerta' : 'seguro');
+  estadoIcono.textContent = alerta ? '🚨' : '🟢';
+  estadoTexto.className   = alerta ? 'estado-alerta' : 'estado-seguro';
+  estadoTexto.textContent = alerta ? 'DRON DETECTADO' : 'ESPECTRO SEGURO';
+  estadoSub.textContent   = `Bloque #${d.n_bloques}  ·  Bins activos: ${d.bins_activos}`;
+
+  // Score
+  const pct = Math.min(100, (d.score / d.score_max) * 100);
+  scoreNum.textContent      = d.score.toFixed(2);
+  scoreFill.style.width     = pct + '%';
+  scoreFill.style.background = pct > 50 ? 'var(--red)' : pct > 25 ? 'var(--amber)' : 'var(--green)';
+
+  // Bins activos
+  const binsPct = Math.min(100, (d.bins_activos / 30) * 100);
+  binsNum.textContent   = d.bins_activos;
+  binsSub.textContent   = `mínimo requerido: ${d.bins_min}`;
+  binsFill.style.width  = binsPct + '%';
+  binsFill.style.background = d.bins_activos >= d.bins_min ? 'var(--red)' : 'var(--cyan)';
+
+  // Piso de ruido
+  pisoNum.textContent  = d.piso_ruido.toFixed(5);
+  actualizarSparkline(d.piso_ruido);
+
+  // Bloques y umbral
+  bloquesNum.textContent = d.n_bloques.toLocaleString();
+  umbralTxt.textContent  = `umbral local: ${d.umbral_local.toFixed(5)}`;
+
+  // FFT — normalizamos el umbral respecto al máximo del espectro
+  const fftMax     = Math.max(...d.fft_norm, 0.001);
+  const umbralNorm = (d.umbral_local / (d.piso_ruido / fftMax + 1e-9)) * 0.1;
+  dibujarFFT(d.fft_norm, Math.min(0.95, umbralNorm));
+
+  // Log de cambios de estado
+  if (ultimaAlerta !== alerta) {
+    if (alerta) {
+      addLog('🚨 DRON DETECTADO  —  firma espectral multicanal presente', 'ev-alerta');
+    } else if (ultimaAlerta !== null) {
+      addLog('🟢 Espectro limpio  —  señal fuera de rango o dron apagado', 'ev-limpio');
+    }
+    ultimaAlerta = alerta;
+  }
+}
+
+// ── WebSocket ────────────────────────────────────────────────
+function conectar() {
+  const ws = new WebSocket('ws://localhost:8765');
+
+  ws.onopen = () => {
+    dotWs.className   = 'dot-ws connected';
+    wsStatus.textContent = 'Conectado a ws://localhost:8765';
+    addLog('Conexión WebSocket establecida con el servidor.', 'ev-sistema');
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      const d = JSON.parse(ev.data);
+      actualizarUI(d);
+    } catch (e) {
+      console.error('JSON inválido:', e);
+    }
+  };
+
+  ws.onclose = () => {
+    dotWs.className      = 'dot-ws disconnected';
+    wsStatus.textContent = 'Desconectado — reintentando en 3s…';
+    addLog('Conexión perdida. Reintentando…', 'ev-sistema');
+    setTimeout(conectar, 3000);
+  };
+
+  ws.onerror = () => {
+    wsStatus.textContent = 'Error de conexión — ¿está corriendo servidor.py?';
+  };
+}
+
+conectar();
+</script>
+</body>
+</html>
